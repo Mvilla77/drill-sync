@@ -7,51 +7,54 @@ if (!PROJECT_URL) throw new Error("FRAMER_PROJECT_URL env var is required");
 if (!API_KEY) throw new Error("FRAMER_API_KEY env var is required");
 
 // Name of the design component as it appears in Framer (Assets panel / instance name).
-// If your component is named differently, update this.
 export const DRILL_COMPONENT_NAME = "Drill Card";
 
-export interface DrillCard {
+// Confirmed via `GET /drills?raw=true` against the live project on 2026-08-09.
+// These are the actual internal keys Framer generated for the "Drill Card Variables".
+// If you ever add a new variable in Framer, or these ever stop matching, re-run
+// the raw endpoint and update this map.
+const CONTROL_KEYS = {
+  duration: "qdIyhjSIk",
+  exercise: "ggM0r7_4Y",
+  coachNotes: "Z083JQaUA",
+  purpose: "Sn_Hsn3JC",
+} as const;
+
+export interface RawDrillCard {
   id: string;
-  program: string | null; // e.g. "Adult Class" / "Youth Class" (inferred from ancestor group names)
-  day: string | null; // e.g. "Monday" / "Wednesday"
-  block: string | null; // e.g. "Adult Footwork Block", "Controlled Fencing", "Open Fencing"
-  breadcrumb: string[]; // full ancestor chain, root -> instance, for debugging
+  program: string | null;
+  day: string | null;
+  block: string | null;
+  breakpoint: string | null; // "Desktop" / "Tablet" / "Phone"
+  breadcrumb: string[];
   duration: string | null;
   exercise: string | null;
   coachNotes: string | null;
   purpose: string | null;
-  rawControls: Record<string, unknown>; // the untouched controls object, for debugging key names
+  rawControls: Record<string, unknown>;
 }
 
-// Known day names / program markers to recognise inside the ancestor chain.
+/** One real-world drill, merged across its Desktop/Tablet/Phone instances. */
+export interface DrillGroup {
+  program: string | null;
+  day: string | null;
+  block: string | null;
+  duration: string | null;
+  exercise: string | null;
+  coachNotes: string | null;
+  purpose: string | null;
+  nodeIds: string[]; // one id per breakpoint instance -- all get updated together
+  breakpoints: string[];
+}
+
 const DAY_NAMES = ["Monday", "Wednesday"];
 const PROGRAM_MARKERS = ["Adult", "Youth"];
+const BREAKPOINT_NAMES = ["Desktop", "Tablet", "Phone"];
 
-/** Connect to the Framer project. Caller is responsible for calling framer.disconnect(). */
 export async function connectFramer(): Promise<Framer> {
   return connect(PROJECT_URL as string, API_KEY as string);
 }
 
-/** Normalise a string for loose matching: lowercase, strip spaces/underscores. */
-function normalise(s: string): string {
-  return s.toLowerCase().replace(/[\s_-]/g, "");
-}
-
-/**
- * Pull a value out of a controls object by loosely matching a human label
- * (e.g. "Coach Notes" matches a control key of "coachNotes" or "coach_notes").
- */
-function readControl(controls: Record<string, unknown>, ...labels: string[]): string | null {
-  const target = labels.map(normalise);
-  for (const [key, value] of Object.entries(controls)) {
-    if (target.includes(normalise(key)) && typeof value === "string") {
-      return value;
-    }
-  }
-  return null;
-}
-
-/** Walk from a node up to the root, collecting ancestor names (excluding the node itself). */
 async function getAncestorNames(node: AnyNode): Promise<string[]> {
   const names: string[] = [];
   let current: AnyNode | null = await node.getParent();
@@ -70,9 +73,11 @@ function inferProgram(breadcrumb: string[]): string | null {
   return breadcrumb.find((n) => PROGRAM_MARKERS.some((p) => n.includes(p))) ?? null;
 }
 
+function inferBreakpoint(breadcrumb: string[]): string | null {
+  return breadcrumb.find((n) => BREAKPOINT_NAMES.includes(n)) ?? null;
+}
+
 function inferBlock(breadcrumb: string[], day: string | null): string | null {
-  // The block is usually the group directly under the Day group
-  // (e.g. "Adult Footwork Block", "Adult Controlled Fencing", "Adult Open Fencing").
   const dayIndex = day ? breadcrumb.findIndex((n) => n === day) : -1;
   if (dayIndex >= 0 && breadcrumb.length > dayIndex + 1) {
     return breadcrumb[dayIndex + 1] ?? null;
@@ -80,7 +85,12 @@ function inferBlock(breadcrumb: string[], day: string | null): string | null {
   return null;
 }
 
-function toDrillCard(instance: ComponentInstanceNode, breadcrumb: string[]): DrillCard {
+function readControl(controls: Record<string, unknown>, key: string): string | null {
+  const value = controls[key];
+  return typeof value === "string" ? value : null;
+}
+
+function toRawDrillCard(instance: ComponentInstanceNode, breadcrumb: string[]): RawDrillCard {
   const controls = instance.controls ?? {};
   const day = inferDay(breadcrumb);
   return {
@@ -88,26 +98,61 @@ function toDrillCard(instance: ComponentInstanceNode, breadcrumb: string[]): Dri
     program: inferProgram(breadcrumb),
     day,
     block: inferBlock(breadcrumb, day),
+    breakpoint: inferBreakpoint(breadcrumb),
     breadcrumb,
-    duration: readControl(controls, "Duration"),
-    exercise: readControl(controls, "Exercise", "Name"),
-    coachNotes: readControl(controls, "Coach Notes", "Coach Instructions", "What the Coach Does"),
-    purpose: readControl(controls, "Purpose"),
+    duration: readControl(controls, CONTROL_KEYS.duration),
+    exercise: readControl(controls, CONTROL_KEYS.exercise),
+    coachNotes: readControl(controls, CONTROL_KEYS.coachNotes),
+    purpose: readControl(controls, CONTROL_KEYS.purpose),
     rawControls: controls,
   };
 }
 
-/** Fetch every Drill Card instance in the project, with inferred Program/Day/Block context. */
-export async function listDrillCards(framer: Framer): Promise<DrillCard[]> {
+/** Every Drill Card instance, one row per breakpoint copy. Mostly useful for debugging. */
+export async function listRawDrillCards(framer: Framer): Promise<RawDrillCard[]> {
   const instances = await framer.getNodesWithType("ComponentInstanceNode");
   const drillInstances = instances.filter((i) => i.componentName === DRILL_COMPONENT_NAME);
 
-  const results: DrillCard[] = [];
+  const results: RawDrillCard[] = [];
   for (const instance of drillInstances) {
     const breadcrumb = await getAncestorNames(instance);
-    results.push(toDrillCard(instance, breadcrumb));
+    results.push(toRawDrillCard(instance, breadcrumb));
   }
   return results;
+}
+
+/**
+ * Every real drill, merged across its Desktop/Tablet/Phone copies. This is what
+ * n8n should use to list drills and to identify which one to update -- editing
+ * a DrillGroup updates all of its underlying breakpoint instances together, so
+ * the site stays consistent across screen sizes.
+ */
+export async function listDrillGroups(framer: Framer): Promise<DrillGroup[]> {
+  const raw = await listRawDrillCards(framer);
+
+  const groups = new Map<string, DrillGroup>();
+  for (const card of raw) {
+    const key = `${card.program}::${card.day}::${card.block}::${card.exercise}`;
+    const existing = groups.get(key);
+    if (existing) {
+      existing.nodeIds.push(card.id);
+      if (card.breakpoint) existing.breakpoints.push(card.breakpoint);
+    } else {
+      groups.set(key, {
+        program: card.program,
+        day: card.day,
+        block: card.block,
+        duration: card.duration,
+        exercise: card.exercise,
+        coachNotes: card.coachNotes,
+        purpose: card.purpose,
+        nodeIds: [card.id],
+        breakpoints: card.breakpoint ? [card.breakpoint] : [],
+      });
+    }
+  }
+
+  return Array.from(groups.values());
 }
 
 export interface DrillUpdateInput {
@@ -118,46 +163,61 @@ export interface DrillUpdateInput {
 }
 
 /**
- * Update a single Drill Card instance by id. Only fields present in `update` are changed.
- * Matches your field names to whatever the real control keys are (see rawControls from
- * `npm run discover` if this ever needs adjusting).
+ * Update a drill by matching its current Program/Day/Block/Exercise, applying
+ * the change to every breakpoint copy (Desktop/Tablet/Phone) so the site stays
+ * consistent. Returns the updated group, or null if no match was found.
  */
-export async function updateDrillCard(
+export async function updateDrillGroup(
   framer: Framer,
-  nodeId: string,
+  match: { program: string; day: string; block: string; exercise: string },
   update: DrillUpdateInput,
-): Promise<DrillCard | null> {
+): Promise<DrillGroup | null> {
   const instances = await framer.getNodesWithType("ComponentInstanceNode");
-  const instance = instances.find((i) => i.id === nodeId && i.componentName === DRILL_COMPONENT_NAME);
-  if (!instance) return null;
+  const drillInstances = instances.filter((i) => i.componentName === DRILL_COMPONENT_NAME);
 
-  const currentControls = instance.controls ?? {};
-  const newControls: Record<string, unknown> = {};
-
-  const fieldLabels: Array<[keyof DrillUpdateInput, string[]]> = [
-    ["duration", ["Duration"]],
-    ["exercise", ["Exercise", "Name"]],
-    ["coachNotes", ["Coach Notes", "Coach Instructions", "What the Coach Does"]],
-    ["purpose", ["Purpose"]],
-  ];
-
-  for (const [field, labels] of fieldLabels) {
-    const value = update[field];
-    if (value === undefined) continue;
-    const target = labels.map(normalise);
-    const matchedKey = Object.keys(currentControls).find((k) => target.includes(normalise(k)));
-    if (matchedKey) {
-      newControls[matchedKey] = value;
-    } else {
-      // Fall back to the first label as the key -- this only matters if discovery
-      // ever finds a card with a missing/renamed control.
-      newControls[labels[0] as string] = value;
+  const toUpdate: ComponentInstanceNode[] = [];
+  for (const instance of drillInstances) {
+    const breadcrumb = await getAncestorNames(instance);
+    const card = toRawDrillCard(instance, breadcrumb);
+    if (card.program === match.program && card.day === match.day && card.block === match.block && card.exercise === match.exercise) {
+      toUpdate.push(instance);
     }
   }
 
-  const updated = await instance.setAttributes({ controls: newControls });
-  if (!updated) return null;
+  if (toUpdate.length === 0) return null;
 
-  const breadcrumb = await getAncestorNames(updated);
-  return toDrillCard(updated, breadcrumb);
+  // Capture "before" values so the response can show the full merged state,
+  // not just whatever fields were passed in.
+  const before = toRawDrillCard(toUpdate[0]!, await getAncestorNames(toUpdate[0]!));
+
+  const newControls: Record<string, unknown> = {};
+  if (update.duration !== undefined) newControls[CONTROL_KEYS.duration] = update.duration;
+  if (update.exercise !== undefined) newControls[CONTROL_KEYS.exercise] = update.exercise;
+  if (update.coachNotes !== undefined) newControls[CONTROL_KEYS.coachNotes] = update.coachNotes;
+  if (update.purpose !== undefined) newControls[CONTROL_KEYS.purpose] = update.purpose;
+
+  const updatedIds: string[] = [];
+  const breakpoints: string[] = [];
+  for (const instance of toUpdate) {
+    const updated = await instance.setAttributes({ controls: newControls });
+    if (updated) {
+      updatedIds.push(updated.id);
+      const breadcrumb = await getAncestorNames(updated);
+      const bp = inferBreakpoint(breadcrumb);
+      if (bp) breakpoints.push(bp);
+    }
+  }
+
+  return {
+    program: match.program,
+    day: match.day,
+    block: match.block,
+    duration: update.duration ?? before.duration,
+    exercise: update.exercise ?? before.exercise,
+    coachNotes: update.coachNotes ?? before.coachNotes,
+    purpose: update.purpose ?? before.purpose,
+    nodeIds: updatedIds,
+    breakpoints,
+  };
 }
+

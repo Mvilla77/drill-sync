@@ -69,23 +69,35 @@ redeploys automatically.
 **List drills (for dropdowns in your form):**
 `GET {service_url}/drills`
 Header: `Authorization: Bearer <SERVICE_API_KEY>`
+Returns one entry per real drill, already merged across its Desktop/Tablet/Phone
+breakpoint copies.
 
 **Update one drill:**
-`PATCH {service_url}/drills/{id}`
+`PATCH {service_url}/drills`
 Header: `Authorization: Bearer <SERVICE_API_KEY>`
-Body (JSON), only include fields you're changing:
+Body (JSON) -- `program`, `day`, `block`, and `exercise` identify *which* drill
+(match its current values exactly), the rest are the fields you're changing:
 ```json
-{ "duration": "12 min", "exercise": "New name", "coachNotes": "...", "purpose": "..." }
+{
+  "program": "Adult Class", "day": "Monday", "block": "Adult Footwork Block",
+  "exercise": "Hill-hill & Toe-toe",
+  "duration": "12 min"
+}
 ```
-Add `?publish=true` to the URL to publish immediately, or leave it off and
-call `POST /publish` once after batching several edits.
+This updates every breakpoint copy of that drill together, so the site stays
+consistent across screen sizes. Add `?publish=true` to the URL to publish
+immediately, or leave it off and call `POST /publish` once after batching
+several edits.
+
+**Debug view:** `GET {service_url}/drills/raw` returns every individual
+component instance (one row per breakpoint), including the untouched
+`rawControls` object -- useful if Framer's internal control keys ever change.
 
 Suggested n8n flow:
 1. **Form Trigger** (or Telegram trigger later) - Program / Day / Block dropdowns,
    a drill picker, and the fields to change.
-2. **HTTP Request** - `GET /drills` to populate the drill picker with current values
-   (or cache this list in a prior step / Google Sheet).
-3. **HTTP Request** - `PATCH /drills/{id}` with the new field values.
+2. **HTTP Request** - `GET /drills` to populate the drill picker with current values.
+3. **HTTP Request** - `PATCH /drills` with the new field values.
 4. Optionally write the same change to a Google Sheet as your running drill
    database/backup.
 

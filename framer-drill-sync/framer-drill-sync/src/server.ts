@@ -1,6 +1,12 @@
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
-import { connectFramer, listDrillCards, updateDrillCard, type DrillUpdateInput } from "./framer-drills.ts";
+import {
+  connectFramer,
+  listDrillGroups,
+  listRawDrillCards,
+  updateDrillGroup,
+  type DrillUpdateInput,
+} from "./framer-drills.ts";
 
 const SERVICE_API_KEY = process.env["SERVICE_API_KEY"];
 const PORT = Number(process.env["PORT"] ?? 3000);
@@ -21,42 +27,61 @@ app.use(async (c, next) => {
 app.get("/health", (c) => c.json({ ok: true }));
 
 // Surface real errors in the response instead of a bare 500, while we're
-// still debugging the Framer connection. Includes the error message and
-// (for now) the stack, so you can see exactly what failed without needing
-// to dig through Railway's logs each time.
+// still debugging the Framer connection.
 app.onError((err, c) => {
   console.error(err);
-  return c.json(
-    {
-      error: err.message,
-      stack: err instanceof Error ? err.stack : undefined,
-    },
-    500,
-  );
+  return c.json({ error: err.message, stack: err instanceof Error ? err.stack : undefined }, 500);
 });
 
-// List every drill card currently on the site, with inferred Program/Day/Block.
-// n8n uses this to populate the "which drill?" dropdowns in your form.
+// List every drill, merged across its Desktop/Tablet/Phone breakpoint copies.
+// This is what n8n uses to populate "which drill?" dropdowns.
 app.get("/drills", async (c) => {
   const framer = await connectFramer();
   try {
-    const drills = await listDrillCards(framer);
+    const drills = await listDrillGroups(framer);
     return c.json({ drills });
   } finally {
     await framer.disconnect();
   }
 });
 
-// Update one drill's fields. Body: { duration?, exercise?, coachNotes?, purpose? }
-// Query param ?publish=true also publishes the change immediately.
-app.patch("/drills/:id", async (c) => {
-  const id = c.req.param("id");
-  const body = (await c.req.json()) as DrillUpdateInput;
+// Debug view: every raw component instance (one row per breakpoint copy),
+// including the untouched controls object with real internal key names.
+app.get("/drills/raw", async (c) => {
+  const framer = await connectFramer();
+  try {
+    const drills = await listRawDrillCards(framer);
+    return c.json({ drills });
+  } finally {
+    await framer.disconnect();
+  }
+});
+
+// Update a drill. Body must identify which drill to change by its CURRENT
+// program/day/block/exercise, plus the fields to change:
+// {
+//   "program": "Adult Class", "day": "Monday", "block": "Adult Footwork Block",
+//   "exercise": "Hill-hill & Toe-toe",
+//   "duration": "12 min"
+// }
+// Updates every breakpoint copy (Desktop/Tablet/Phone) together.
+// Add ?publish=true to publish immediately.
+app.patch("/drills", async (c) => {
+  const body = (await c.req.json()) as DrillUpdateInput & {
+    program: string;
+    day: string;
+    block: string;
+    exercise: string;
+  };
+  const { program, day, block, exercise, ...update } = body;
+  if (!program || !day || !block || !exercise) {
+    return c.json({ error: "program, day, block, and exercise are all required to identify the drill" }, 400);
+  }
   const shouldPublish = c.req.query("publish") === "true";
 
   const framer = await connectFramer();
   try {
-    const updated = await updateDrillCard(framer, id, body);
+    const updated = await updateDrillGroup(framer, { program, day, block, exercise }, update);
     if (!updated) return c.json({ error: "Drill not found" }, 404);
 
     let publishResult = null;
