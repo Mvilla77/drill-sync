@@ -82,9 +82,19 @@ app.patch("/drills", async (c) => {
   }
   const shouldPublish = c.req.query("publish") === "true";
 
+  // Treat empty/whitespace-only strings as "no change" -- important for the
+  // AI agent, which sends every field on every call but leaves unchanged
+  // ones as "".
+  const cleanUpdate: DrillUpdateInput = {};
+  for (const [key, value] of Object.entries(update)) {
+    if (typeof value === "string" && value.trim() !== "") {
+      (cleanUpdate as Record<string, string>)[key] = value;
+    }
+  }
+
   const framer = await connectFramer();
   try {
-    const updated = await updateDrillGroup(framer, { program, day, block, exercise: currentExercise }, update);
+    const updated = await updateDrillGroup(framer, { program, day, block, exercise: currentExercise }, cleanUpdate);
     if (!updated) return c.json({ error: "Drill not found" }, 404);
 
     let publishResult = null;
