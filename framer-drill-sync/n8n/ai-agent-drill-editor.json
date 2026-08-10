@@ -1,0 +1,148 @@
+{
+  "name": "AI Agent - Editar Drills de Esgrima",
+  "nodes": [
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "c1c1c1c1-0001-4000-8000-000000000001",
+      "name": "When chat message received",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.1,
+      "position": [-500, 0],
+      "webhookId": "ai-drill-agent-chat"
+    },
+    {
+      "parameters": {
+        "options": {
+          "systemMessage": "Eres el asistente del entrenador de esgrima para editar el plan de entrenamiento publicado en su sitio web (Framer). Tienes dos herramientas:\n\n1. \"List Drills\": devuelve TODOS los drills actuales con sus valores exactos (program, day, block, exercise, duration, coachNotes, purpose).\n2. \"Update Drill\": modifica un drill y publica el cambio en el sitio.\n\nREGLAS IMPORTANTES:\n- Para identificar un drill a modificar, \"Update Drill\" necesita el texto EXACTO (mayusculas, tildes, todo) de program, day, block y currentExercise tal como aparecen ahora mismo. Si no estas 100% seguro de esos valores exactos, usa \"List Drills\" PRIMERO para confirmarlos antes de llamar a \"Update Drill\". No inventes ni adivines esos valores.\n- \"program\" solo puede ser \"Adult Class\" o \"Youth Class\". \"day\" solo puede ser \"Monday\" o \"Wednesday\".\n- Solo incluye los campos que el usuario realmente quiere cambiar (duration, exercise para renombrar, coachNotes, purpose). Deja los demas vacios.\n- Si el pedido del usuario es ambiguo (por ejemplo, hay dos drills con nombre parecido, o no especifico el dia), usa \"List Drills\" y pregunta al usuario cual es antes de modificar nada.\n- Despues de una actualizacion exitosa, confirma en espanol, de forma breve, exactamente que se cambio.\n- Si \"Update Drill\" devuelve un error (por ejemplo drill no encontrado), explica el error al usuario y sugiere revisar con \"List Drills\".\n\nResponde siempre en el mismo idioma que use el usuario."
+        }
+      },
+      "id": "c1c1c1c1-0002-4000-8000-000000000002",
+      "name": "AI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [-260, 0]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "claude-sonnet-4-5-20250929",
+          "cachedResultName": "Claude Sonnet (pick your current model in this dropdown)"
+        },
+        "options": {}
+      },
+      "id": "c1c1c1c1-0003-4000-8000-000000000003",
+      "name": "Anthropic Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [-380, 220],
+      "credentials": {
+        "anthropicApi": {
+          "id": "PLACEHOLDER_CREDENTIAL_ID",
+          "name": "Anthropic account"
+        }
+      },
+      "notes": "Open this node and pick your actual available model from the dropdown -- the value above is just a placeholder."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://drill-sync-production.up.railway.app/drills",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer <your SERVICE_API_KEY>"
+            }
+          ]
+        },
+        "options": {},
+        "toolDescription": "Devuelve la lista completa de drills actuales del plan de esgrima (program, day, block, exercise, duration, coachNotes, purpose). Usa esto SIEMPRE antes de modificar un drill si no estas seguro de sus valores exactos, para no adivinar el texto exacto que se necesita para identificarlo."
+      },
+      "id": "c1c1c1c1-0004-4000-8000-000000000004",
+      "name": "List Drills",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-100, 220]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://n8n-production-39c0.up.railway.app/webhook/update-drill",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"program\": $fromAI('program', 'Class program, EXACTLY as shown by List Drills: either \"Adult Class\" or \"Youth Class\"', 'string'), \"day\": $fromAI('day', 'Day, EXACTLY as shown by List Drills: either \"Monday\" or \"Wednesday\"', 'string'), \"block\": $fromAI('block', 'Training block name, EXACTLY as shown by List Drills, e.g. \"Adult Footwork Block\"', 'string'), \"currentExercise\": $fromAI('currentExercise', 'The EXACT current name of the drill/exercise as shown by List Drills right now -- used to find it. Do not guess; look it up first if unsure.', 'string'), \"exercise\": $fromAI('newExerciseName', 'The new name for the drill, ONLY if the user wants to rename it. Otherwise pass an empty string.', 'string', ''), \"duration\": $fromAI('duration', 'The new duration text (e.g. \"12 min\"), ONLY if the user wants to change it. Otherwise pass an empty string.', 'string', ''), \"coachNotes\": $fromAI('coachNotes', 'The new coach instructions text, ONLY if the user wants to change it. Otherwise pass an empty string.', 'string', ''), \"purpose\": $fromAI('purpose', 'The new purpose/goal text, ONLY if the user wants to change it. Otherwise pass an empty string.', 'string', '') } }}",
+        "options": {},
+        "toolDescription": "Modifica un drill del plan de esgrima y publica el cambio en el sitio web. Necesita el program, day, block y currentExercise EXACTOS (usa List Drills primero si hay alguna duda) para encontrar el drill correcto, mas los campos que se quieran cambiar."
+      },
+      "id": "c1c1c1c1-0005-4000-8000-000000000005",
+      "name": "Update Drill",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [80, 220]
+    }
+  ],
+  "connections": {
+    "When chat message received": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anthropic Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Drills": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Drill": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "framer-drill-sync-ai-agent-workflow"
+  }
+}
