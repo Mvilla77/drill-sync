@@ -5,8 +5,10 @@ import {
   listDrillGroups,
   listRawDrillCards,
   updateDrillGroup,
+  randomizeDrillsFromPool,
   type DrillUpdateInput,
 } from "./framer-drills.ts";
+import { NEW_DRILL_POOL } from "./new-drill-pool.ts";
 
 const SERVICE_API_KEY = process.env["SERVICE_API_KEY"];
 const PORT = Number(process.env["PORT"] ?? 3000);
@@ -114,6 +116,84 @@ app.post("/publish", async (c) => {
   try {
     const result = await framer.publish();
     return c.json({ published: true, result });
+  } finally {
+    await framer.disconnect();
+  }
+});
+
+// Bulk-update several drills in ONE Framer connection (avoids the
+// "too many concurrent sessions" error you get from firing many separate
+// PATCH /drills calls back to back). Body:
+// { "updates": [ { program, day, block, currentExercise, exercise?, duration?, coachNotes?, purpose? }, ... ] }
+// Add ?publish=true to publish once at the end.
+app.patch("/drills/bulk", async (c) => {
+  const body = (await c.req.json()) as {
+    updates: Array<{
+      program: string;
+      day: string;
+      block: string;
+      currentExercise: string;
+    } & DrillUpdateInput>;
+  };
+
+  if (!Array.isArray(body.updates)) {
+    return c.json({ error: "Body must be { updates: [ ... ] }" }, 400);
+  }
+
+  const shouldPublish = c.req.query("publish") === "true";
+  const framer = await connectFramer();
+  try {
+    const results: Array<Record<string, unknown>> = [];
+
+    for (const u of body.updates) {
+      const { program, day, block, currentExercise, ...rest } = u;
+      if (!program || !day || !block || !currentExercise) {
+        results.push({ error: "Missing program/day/block/currentExercise", input: u });
+        continue;
+      }
+
+      const cleanUpdate: DrillUpdateInput = {};
+      for (const [key, value] of Object.entries(rest)) {
+        if (typeof value === "string" && value.trim() !== "") {
+          (cleanUpdate as Record<string, string>)[key] = value;
+        }
+      }
+
+      const updated = await updateDrillGroup(framer, { program, day, block, exercise: currentExercise }, cleanUpdate);
+      if (!updated) {
+        results.push({ error: "Drill not found", input: u });
+      } else {
+        results.push({ drill: updated });
+      }
+    }
+
+    let publishResult = null;
+    if (shouldPublish) {
+      publishResult = await framer.publish();
+    }
+
+    return c.json({ results, count: results.length, published: publishResult !== null, publishResult });
+  } finally {
+    await framer.disconnect();
+  }
+});
+
+// Bulk-populate every card on the site with a random drill from the
+// 40-drill pool (src/new-drill-pool.ts), matched by program+block, without
+// repeating within a group. Add ?publish=true to publish immediately.
+app.post("/drills/randomize", async (c) => {
+  const shouldPublish = c.req.query("publish") === "true";
+
+  const framer = await connectFramer();
+  try {
+    const results = await randomizeDrillsFromPool(framer, NEW_DRILL_POOL);
+
+    let publishResult = null;
+    if (shouldPublish) {
+      publishResult = await framer.publish();
+    }
+
+    return c.json({ results, count: results.length, published: publishResult !== null, publishResult });
   } finally {
     await framer.disconnect();
   }
