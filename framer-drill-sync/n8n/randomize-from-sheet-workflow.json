@@ -1,0 +1,209 @@
+{
+  "name": "Poblar Drills desde Google Sheets",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "randomize-from-sheet",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "d1d1d1d1-0001-4000-8000-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        0
+      ],
+      "webhookId": "randomize-from-sheet"
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gid=0"
+        },
+        "options": {}
+      },
+      "id": "d1d1d1d1-0002-4000-8000-000000000002",
+      "name": "Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -460,
+        0
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "PLACEHOLDER_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      },
+      "notes": "Open this node: connect your Google account, then pick your actual spreadsheet and sheet/tab from the dropdowns (the values here are placeholders)."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://drill-sync-production.up.railway.app/drills",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer <your SERVICE_API_KEY>"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "d1d1d1d1-0003-4000-8000-000000000003",
+      "name": "Get Current Drills",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -220,
+        0
+      ],
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Read the drills database (Google Sheets) and the drill cards currently\n// live on the site, and pair each site card with a random matching drill\n// from the sheet (same program + block), without repeating within a group\n// as long as the sheet has enough entries for that group.\n//\n// Each card is identified by its stable `id` (from GET /drills), NOT by\n// its current exercise name -- the exercise name is exactly the field\n// we're changing, so matching by id avoids any risk of using a stale name.\n\nconst sheetRows = $('Google Sheets').all().map(item => item.json);\nconst currentSlots = $('Get Current Drills').first().json.drills;\n\nfunction shuffle(arr) {\n  const a = [...arr];\n  for (let i = a.length - 1; i > 0; i--) {\n    const j = Math.floor(Math.random() * (i + 1));\n    [a[i], a[j]] = [a[j], a[i]];\n  }\n  return a;\n}\n\nconst buckets = {};\nfor (const row of sheetRows) {\n  const key = `${row.program}::${row.block}`;\n  if (!buckets[key]) buckets[key] = [];\n  buckets[key].push(row);\n}\nconst shuffledBuckets = {};\nfor (const key in buckets) shuffledBuckets[key] = shuffle(buckets[key]);\nconst cursors = {};\n\nconst updates = [];\nfor (const slot of currentSlots) {\n  const key = `${slot.program}::${slot.block}`;\n  const bucket = shuffledBuckets[key];\n  if (!bucket || bucket.length === 0) continue; // no matching drills in the sheet for this group\n\n  const cursor = cursors[key] || 0;\n  const pick = bucket[cursor % bucket.length];\n  cursors[key] = cursor + 1;\n\n  updates.push({\n    id: slot.id,               // stable identifier -- this is what the service matches on\n    exercise: pick.exercise,\n    duration: pick.duration,\n    coachNotes: pick.coachNotes,\n    purpose: pick.purpose\n  });\n}\n\nreturn [{ json: { updates } }];\n"
+      },
+      "id": "d1d1d1d1-0004-4000-8000-000000000004",
+      "name": "Select Random Drills",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        20,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "https://drill-sync-production.up.railway.app/drills/bulk",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer <your SERVICE_API_KEY>"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { updates: $json.updates } }}",
+        "options": {},
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "publish",
+              "value": "true"
+            }
+          ]
+        }
+      },
+      "id": "d1d1d1d1-0005-4000-8000-000000000005",
+      "name": "Update Drill in Framer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        280,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "d1d1d1d1-0007-4000-8000-000000000007",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        780,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Sheets": {
+      "main": [
+        [
+          {
+            "node": "Get Current Drills",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Current Drills": {
+      "main": [
+        [
+          {
+            "node": "Select Random Drills",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Random Drills": {
+      "main": [
+        [
+          {
+            "node": "Update Drill in Framer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Drill in Framer": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "framer-drill-sync-randomize-from-sheet-workflow"
+  }
+}
